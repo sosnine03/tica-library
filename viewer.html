@@ -96,7 +96,7 @@
       const availableWidth = Math.min(stage.clientWidth - (stage.clientWidth <= 640 ? 0 : 24), 1100);
       const cssScale = Math.max(.25, availableWidth / baseViewport.width);
       const viewport = page.getViewport({ scale:cssScale });
-      const outputScale = stage.clientWidth <= 640 ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
+      const outputScale = Math.min(window.devicePixelRatio || 1, 2);
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d', { alpha:false });
       canvas.width = Math.floor(viewport.width * outputScale);
