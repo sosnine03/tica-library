@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#06171b">
+  <title>Просмотр документа — Электронная библиотека</title>
+  <style>
+    :root { --bg:#06171b; --panel:#0b252b; --line:#29464b; --ink:#f5f8f8; --muted:#9fb1b4; --red:#e21b2d; }
+    * { box-sizing:border-box; }
+    html { color-scheme:dark; }
+    [hidden] { display:none !important; }
+    :focus-visible { outline:3px solid #ff7b86; outline-offset:3px; }
+    html, body { height:100%; }
+    body { margin:0; color:var(--ink); background:var(--bg); font-family:Arial,Helvetica,sans-serif; overflow:hidden; }
+    .app { height:100%; display:grid; grid-template-rows:auto 1fr; }
+    .bar { min-height:72px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:18px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); background:#071b20; }
+    .back, .download { display:inline-flex; min-height:42px; align-items:center; justify-content:center; padding:0 15px; border:1px solid var(--line); color:var(--ink); text-decoration:none; font-weight:700; background:var(--panel); }
+    .download { border-color:var(--red); background:var(--red); }
+    .meta { min-width:0; }
+    .meta strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:16px; }
+    .meta span { display:block; margin-top:3px; color:var(--muted); font-size:12px; }
+    .stage { position:relative; min-height:0; overflow:auto; overscroll-behavior:contain; background:#253236; -webkit-overflow-scrolling:touch; }
+    .pages { width:100%; padding:18px 12px 60px; }
+    .page { position:relative; width:min(100%,1100px); min-height:70vh; margin:0 auto 18px; display:grid; place-items:center; background:#d7dcdd; box-shadow:0 8px 32px rgba(0,0,0,.28); }
+    .page canvas { display:block; max-width:100%; height:auto; background:#fff; }
+    .page-number { position:absolute; right:8px; bottom:8px; padding:4px 7px; color:#fff; background:rgba(0,0,0,.62); font-size:11px; }
+    .page-wait { color:#536064; font-size:13px; }
+    .state { position:absolute; inset:0; z-index:5; display:grid; place-items:center; padding:24px; text-align:center; background:var(--bg); }
+    .state[hidden] { display:none; }
+    .state p { max-width:520px; color:var(--muted); }
+    .spinner { width:34px; height:34px; margin:0 auto 15px; border:3px solid #29464b; border-top-color:var(--red); border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @media (max-width:640px) {
+      .bar { min-height:64px; grid-template-columns:auto minmax(0,1fr); padding:10px 12px; gap:10px; }
+      .bar .back { width:44px; padding:0; font-size:0; }
+      .bar .back::before { content:'←'; font-size:22px; }
+      .download { grid-column:2; justify-self:start; min-height:44px; font-size:13px; }
+      .meta strong { font-size:14px; }
+      .pages { padding:8px 0 42px; }
+      .page { width:100%; margin-bottom:8px; box-shadow:none; }
+    }
+    @media (prefers-reduced-motion:reduce) { .spinner { animation:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="bar">
+      <a class="back" id="backLink" href="index.html" aria-label="Назад к папке с документами">← Назад</a>
+      <div class="meta">
+        <strong id="documentName">Загрузка документа…</strong>
+        <span id="documentMeta">Электронная библиотека TICA PRO</span>
+      </div>
+      <a class="download" id="downloadLink" href="#" hidden>Скачать PDF</a>
+    </header>
+    <main class="stage" id="stage">
+      <div class="state" id="loadingState" role="status"><div><div class="spinner" aria-hidden="true"></div><strong>Загружаем документ</strong><p id="loadingMessage">Подготавливаем страницы для просмотра.</p></div></div>
+      <div class="state" id="errorState" role="alert" hidden><div><strong>Документ не удалось открыть</strong><p id="errorMessage">Попробуйте обновить страницу или открыть файл позднее.</p><a class="back" href="">Повторить загрузку</a></div></div>
+      <div class="pages" id="pages" aria-label="Страницы PDF"></div>
+    </main>
+  </div>
+
+  <script type="module">
+    import * as pdfjsLib from './vendor/pdfjs/pdf.mjs';
+    import { fetchResource, formatBytes, libraryUrlFor } from './js/catalog.mjs';
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/pdf.worker.mjs';
+
+    const params = new URLSearchParams(location.search);
+    const path = params.get('path');
+    const requestedPage = Math.max(1, Number(params.get('page')) || 1);
+    const loading = document.querySelector('#loadingState');
+    const loadingMessage = document.querySelector('#loadingMessage');
+    const error = document.querySelector('#errorState');
+    const pagesNode = document.querySelector('#pages');
+    const stage = document.querySelector('#stage');
+    const nameNode = document.querySelector('#documentName');
+    const metaNode = document.querySelector('#documentMeta');
+    const download = document.querySelector('#downloadLink');
+    const back = document.querySelector('#backLink');
+    let pdfDocument;
+    let firstPageRendered = false;
+
+    function parentPath(value) {
+      const parts = value.split('/').filter(Boolean);
+      parts.pop();
+      return parts.length ? `/${parts.join('/')}` : '/';
+    }
+
+    async function renderPage(shell) {
+      if (shell.dataset.rendered || shell.dataset.rendering) return;
+      shell.dataset.rendering = 'true';
+      const pageNumber = Number(shell.dataset.page);
+      const page = await pdfDocument.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale:1 });
+      const availableWidth = Math.min(stage.clientWidth - (stage.clientWidth <= 640 ? 0 : 24), 1100);
+      const cssScale = Math.max(.25, availableWidth / baseViewport.width);
+      const viewport = page.getViewport({ scale:cssScale });
+      const outputScale = stage.clientWidth <= 640 ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d', { alpha:false });
+      canvas.width = Math.floor(viewport.width * outputScale);
+      canvas.height = Math.floor(viewport.height * outputScale);
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      shell.style.minHeight = `${Math.floor(viewport.height)}px`;
+      shell.querySelector('.page-wait').replaceWith(canvas);
+      await page.render({
+        canvasContext:context,
+        viewport,
+        transform:outputScale === 1 ? null : [outputScale,0,0,outputScale,0,0],
+      }).promise;
+      shell.dataset.rendered = 'true';
+      delete shell.dataset.rendering;
+      if (!firstPageRendered) {
+        firstPageRendered = true;
+        loading.hidden = true;
+      }
+    }
+
+    function preparePages(count) {
+      const fragment = document.createDocumentFragment();
+      for (let number = 1; number <= count; number++) {
+        const shell = document.createElement('section');
+        shell.className = 'page';
+        shell.dataset.page = String(number);
+        shell.innerHTML = `<span class="page-wait">Страница ${number} загружается…</span><span class="page-number">${number} / ${count}</span>`;
+        fragment.append(shell);
+      }
+      pagesNode.append(fragment);
+
+      const renderObserver = new IntersectionObserver(entries => {
+        entries.filter(entry => entry.isIntersecting).forEach(entry => renderPage(entry.target).catch(showError));
+      }, { root:stage, rootMargin:'1200px 0px', threshold:.01 });
+
+      const positionObserver = new IntersectionObserver(entries => {
+        const visible = entries.filter(entry => entry.isIntersecting).sort((a,b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) metaNode.textContent = `${formatBytes(Number(metaNode.dataset.size))} · страница ${visible.target.dataset.page} из ${count}`;
+      }, { root:stage, threshold:[.25,.5,.75] });
+
+      pagesNode.querySelectorAll('.page').forEach(shell => {
+        renderObserver.observe(shell);
+        positionObserver.observe(shell);
+      });
+    }
+
+    function showError(reason) {
+      loading.hidden = true;
+      error.hidden = false;
+      document.querySelector('#errorMessage').textContent = reason.message || String(reason);
+      nameNode.textContent = 'Ошибка загрузки';
+    }
+
+    async function init() {
+      if (!path) throw new Error('Не указан путь к документу.');
+      back.href = libraryUrlFor(parentPath(path));
+      const resource = await fetchResource(path);
+      if (resource.mime_type !== 'application/pdf' && !resource.name.toLowerCase().endsWith('.pdf')) {
+        throw new Error('Встроенный просмотр пока поддерживается только для PDF.');
+      }
+      nameNode.textContent = resource.name;
+      document.title = `${resource.name} — Электронная библиотека`;
+      metaNode.dataset.size = String(resource.size || 0);
+      metaNode.textContent = `${formatBytes(resource.size)} · загрузка PDF`;
+      const pdfUrl = resource.file;
+      download.href = pdfUrl;
+      download.download = resource.name;
+      download.hidden = false;
+
+      const task = pdfjsLib.getDocument({
+        url:pdfUrl,
+        cMapUrl:'./vendor/pdfjs/cmaps/',
+        standardFontDataUrl:'./vendor/pdfjs/standard_fonts/',
+        wasmUrl:'./vendor/pdfjs/wasm/',
+      });
+      task.onProgress = ({ loaded, total }) => {
+        if (total) loadingMessage.textContent = `Загружено ${Math.round((loaded / total) * 100)}%`;
+      };
+      pdfDocument = await task.promise;
+      metaNode.textContent = `${formatBytes(resource.size)} · ${pdfDocument.numPages} стр.`;
+      preparePages(pdfDocument.numPages);
+      const target = pagesNode.querySelector(`.page[data-page="${Math.min(requestedPage, pdfDocument.numPages)}"]`);
+      await renderPage(target);
+      target.scrollIntoView({ block:'start' });
+    }
+
+    init().catch(showError);
+  </script>
+</body>
+</html>

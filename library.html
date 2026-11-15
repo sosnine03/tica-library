@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#06171b">
+  <title>Раздел библиотеки</title>
+  <style>
+    :root { --bg:#06171b; --panel:#0b252b; --panel2:#0e2d34; --line:#29464b; --ink:#f5f8f8; --muted:#9fb1b4; --red:#e21b2d; }
+    * { box-sizing:border-box; }
+    html { color-scheme:dark; }
+    [hidden] { display:none !important; }
+    :focus-visible { outline:3px solid #ff7b86; outline-offset:4px; }
+    button, input { font:inherit; }
+    body { margin:0; color:var(--ink); background:var(--bg); font-family:Arial,Helvetica,sans-serif; line-height:1.45; }
+    a { color:inherit; }
+    .shell { width:min(1080px,calc(100% - 32px)); margin:0 auto; }
+    header { border-bottom:1px solid var(--line); background:linear-gradient(120deg,#071b20,#0b2a31); }
+    .top { min-height:78px; display:flex; align-items:center; justify-content:space-between; gap:20px; }
+    .brand img { display:block; width:min(260px,50vw); height:auto; }
+    .home { color:var(--muted); text-decoration:none; font-size:14px; }
+    .heading { padding:42px 0 48px; }
+    .crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; color:#ff7b86; font-size:14px; overflow-wrap:anywhere; }
+    .crumbs a { display:inline-flex; align-items:center; min-height:44px; }
+    h1 { margin:0; max-width:850px; overflow-wrap:anywhere; font-size:clamp(34px,6vw,62px); line-height:1; letter-spacing:-.04em; }
+    .heading p { margin:15px 0 0; color:var(--muted); }
+    main { padding:38px 0 80px; }
+    .tools { display:grid; grid-template-columns:1fr minmax(260px,390px); gap:20px; align-items:center; margin-bottom:22px; }
+    .count { color:var(--muted); }
+    .search-label { display:block; margin-bottom:8px; color:var(--muted); font-size:14px; }
+    .reset { display:inline-flex; align-items:center; min-height:44px; margin-top:8px; padding:0 12px; border:1px solid var(--line); color:var(--ink); background:var(--panel); cursor:pointer; }
+    input:disabled { opacity:.6; }
+    input { width:100%; min-height:50px; padding:0 15px; border:1px solid var(--line); outline:none; color:var(--ink); background:var(--panel); }
+    input:focus { border-color:#71888e; }
+    .list { border-top:1px solid var(--line); }
+    .item { display:grid; grid-template-columns:46px minmax(0,1fr) auto; gap:16px; align-items:center; min-height:82px; padding:14px 10px; border-bottom:1px solid var(--line); text-decoration:none; transition:.16s ease; }
+    .item:hover { padding-left:16px; background:var(--panel); }
+    .icon { display:grid; width:42px; height:42px; place-items:center; border:1px solid var(--line); color:#ff7984; background:var(--panel2); font-size:12px; font-weight:800; }
+    .item strong { display:block; overflow-wrap:anywhere; }
+    .item small { display:block; margin-top:4px; color:var(--muted); }
+    .action { color:#ff7b86; font-size:14px; font-weight:700; white-space:nowrap; }
+    .state { padding:42px 18px; border:1px solid var(--line); color:var(--muted); text-align:center; }
+    .state[hidden], .item[hidden] { display:none; }
+    @media(max-width:680px) {
+      .shell { width:min(100% - 24px,1080px); }
+      .top { min-height:68px; }
+      .home { font-size:0; }
+      .home::after { content:'← На главную'; font-size:13px; }
+      .heading { padding:34px 0 38px; }
+      .tools { grid-template-columns:1fr; }
+      .item { grid-template-columns:42px minmax(0,1fr); }
+      .action { grid-column:2; }
+    }
+    @media(prefers-reduced-motion:reduce) { * { transition:none !important; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell top">
+      <a class="brand" href="index.html"><img src="assets/tica-pro-logo.png" alt="TICA PRO"></a>
+      <a class="home" href="index.html">← На главную</a>
+    </div>
+    <div class="shell heading">
+      <nav class="crumbs" id="breadcrumbs" aria-label="Путь к папке"></nav>
+      <h1 id="folderName">Загрузка раздела…</h1>
+      <p>PDF можно смотреть на сайте. Остальные файлы доступны для скачивания.</p>
+    </div>
+  </header>
+  <main class="shell">
+    <div class="tools">
+      <div class="count" id="count" role="status" aria-live="polite">Получаем список файлов…</div>
+      <div>
+        <label class="search-label" for="search">Поиск в этой папке</label>
+        <input id="search" type="search" placeholder="Название или модель оборудования" autocomplete="off" disabled>
+        <button class="reset" id="resetSearch" type="button" hidden>Сбросить поиск</button>
+      </div>
+    </div>
+    <div class="state" id="loading">Загрузка содержимого…</div>
+    <div class="state" id="error" role="alert" hidden><p id="errorMessage"></p><a href="" class="reset">Повторить загрузку</a></div>
+    <div class="state" id="empty" hidden>В этом разделе пока нет документов.</div>
+    <div class="list" id="list"></div>
+    <noscript><p>Для загрузки списка документов включите JavaScript в браузере.</p></noscript>
+  </main>
+
+  <script type="module">
+    import { fetchResource, formatBytes, viewerUrlFor, libraryUrlFor, matchesSearch } from './js/catalog.mjs';
+
+    const params = new URLSearchParams(location.search);
+    const path = params.get('path') || '/';
+    const list = document.querySelector('#list');
+    const loading = document.querySelector('#loading');
+    const error = document.querySelector('#error');
+    const empty = document.querySelector('#empty');
+    const search = document.querySelector('#search');
+    const count = document.querySelector('#count');
+    const reset = document.querySelector('#resetSearch');
+    const crumbs = document.querySelector('#breadcrumbs');
+    const parts = path.split('/').filter(Boolean);
+    ['Вся библиотека', ...parts].forEach((name, index) => {
+      if (index) crumbs.append(document.createTextNode(' / '));
+      const crumb = document.createElement(index === parts.length ? 'span' : 'a');
+      crumb.textContent = name;
+      if (index === parts.length) crumb.setAttribute('aria-current', 'page');
+      else crumb.href = libraryUrlFor('/' + parts.slice(0, index).join('/'));
+      crumbs.append(crumb);
+    });
+
+    function renderItem(item) {
+      const link = document.createElement('a');
+      link.className = 'item';
+      link.dataset.search = item.name.toLocaleLowerCase('ru');
+      const pdf = item.type === 'file' && (item.mime_type === 'application/pdf' || item.name.toLowerCase().endsWith('.pdf'));
+      if (item.type === 'dir') link.href = libraryUrlFor(item.path);
+      else if (pdf) link.href = viewerUrlFor(item.path);
+      else {
+        link.href = item.file || '#';
+        link.target = '_blank';
+        link.rel = 'noopener';
+      }
+      const type = item.type === 'dir' ? 'DIR' : pdf ? 'PDF' : 'FILE';
+      const extension = item.name.includes('.') ? item.name.split('.').pop().toUpperCase() : 'Файл';
+      const meta = item.type === 'dir' ? 'Папка с материалами' : `${formatBytes(item.size)} · ${extension}`;
+      link.innerHTML = `<span class="icon">${type}</span><span><strong></strong><small></small></span><span class="action">${item.type === 'dir' ? 'Открыть →' : pdf ? 'Смотреть →' : 'Скачать ↗'}</span>`;
+      link.querySelector('strong').textContent = item.name.replace(/\.pdf$/i,'');
+      link.querySelector('small').textContent = meta;
+      return link;
+    }
+
+    async function init() {
+      const resource = await fetchResource(path);
+      if (resource.type !== 'dir') { location.replace(viewerUrlFor(path)); return; }
+      const items = resource._embedded?.items || [];
+      document.querySelector('#folderName').textContent = resource.name;
+      document.title = `${resource.name} — Электронная библиотека`;
+      loading.hidden = true;
+      items.forEach(item => list.append(renderItem(item)));
+      search.disabled = false;
+      filter();
+    }
+
+    function filter() {
+      const items = [...list.querySelectorAll('.item')];
+      let visible = 0;
+      items.forEach(item => {
+        item.hidden = !matchesSearch(item.dataset.search, search.value);
+        if (!item.hidden) visible++;
+      });
+      empty.hidden = visible !== 0;
+      empty.textContent = search.value.trim() ? 'По этому запросу ничего не найдено. Попробуйте другое название или модель.' : 'В этой папке пока нет документов.';
+      count.textContent = `Показано: ${visible} из ${items.length}`;
+      reset.hidden = !search.value;
+    }
+    search.addEventListener('input', filter);
+    reset.addEventListener('click', () => {
+      search.value = '';
+      filter();
+      search.focus();
+    });
+
+    init().catch(reason => {
+      loading.hidden = true;
+      error.hidden = false;
+      document.querySelector('#errorMessage').textContent = `Не удалось загрузить папку. Проверьте интернет-соединение и попробуйте снова. ${reason.message || ''}`;
+      document.querySelector('#folderName').textContent = 'Раздел не загрузился';
+      count.textContent = 'Ошибка загрузки';
+    });
+  </script>
+</body>
+</html>
