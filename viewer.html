@@ -14,9 +14,12 @@
     html, body { height:100%; }
     body { margin:0; color:var(--ink); background:var(--bg); font-family:Arial,Helvetica,sans-serif; overflow:hidden; }
     .app { height:100%; display:grid; grid-template-rows:auto 1fr; }
-    .bar { min-height:72px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:18px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); background:#071b20; }
+    .bar { min-height:72px; display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; gap:18px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); background:#071b20; }
     .back, .download { display:inline-flex; min-height:42px; align-items:center; justify-content:center; padding:0 15px; border:1px solid var(--line); color:var(--ink); text-decoration:none; font-weight:700; background:var(--panel); }
     .download { border-color:var(--red); background:var(--red); }
+    .zoom-controls { display:flex; align-items:center; border:1px solid var(--line); background:var(--panel); }
+    .zoom-controls button { width:42px; min-height:42px; border:0; color:var(--ink); background:transparent; font-size:22px; cursor:pointer; }
+    .zoom-controls output { min-width:56px; color:var(--muted); text-align:center; font-size:12px; }
     .meta { min-width:0; }
     .meta strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:16px; }
     .meta span { display:block; margin-top:3px; color:var(--muted); font-size:12px; }
@@ -35,6 +38,7 @@
       .bar { min-height:64px; grid-template-columns:auto minmax(0,1fr); padding:10px 12px; gap:10px; }
       .bar .back { width:44px; padding:0; font-size:0; }
       .bar .back::before { content:'←'; font-size:22px; }
+      .zoom-controls { grid-column:1; grid-row:2; }
       .download { grid-column:2; justify-self:start; min-height:44px; font-size:13px; }
       .meta strong { font-size:14px; }
       .pages { padding:8px 0 42px; }
@@ -50,6 +54,11 @@
       <div class="meta">
         <strong id="documentName">Загрузка документа…</strong>
         <span id="documentMeta">Электронная библиотека TICA PRO</span>
+      </div>
+      <div class="zoom-controls" id="zoomControls" aria-label="Масштаб документа">
+        <button id="zoomOut" type="button" aria-label="Уменьшить масштаб">−</button>
+        <output id="zoomValue" aria-live="polite">100%</output>
+        <button id="zoomIn" type="button" aria-label="Увеличить масштаб">+</button>
       </div>
       <a class="download" id="downloadLink" href="#" hidden>Скачать PDF</a>
     </header>
@@ -74,12 +83,33 @@
     const error = document.querySelector('#errorState');
     const pagesNode = document.querySelector('#pages');
     const stage = document.querySelector('#stage');
+    const zoomOut = document.querySelector('#zoomOut');
+    const zoomIn = document.querySelector('#zoomIn');
+    const zoomValue = document.querySelector('#zoomValue');
     const nameNode = document.querySelector('#documentName');
     const metaNode = document.querySelector('#documentMeta');
     const download = document.querySelector('#downloadLink');
     const back = document.querySelector('#backLink');
+    const requestedZoom = Number(params.get('zoom'));
+    const zoom = Math.min(3, Math.max(1, requestedZoom || (matchMedia('(max-width:640px)').matches ? 1.5 : 1)));
     let pdfDocument;
     let firstPageRendered = false;
+    let visiblePage = requestedPage;
+
+    zoomValue.textContent = `${Math.round(zoom * 100)}%`;
+    zoomOut.disabled = zoom <= 1;
+    zoomIn.disabled = zoom >= 3;
+
+    function changeZoom(delta) {
+      const next = Math.min(3, Math.max(1, zoom + delta));
+      if (next === zoom) return;
+      params.set('zoom', String(next));
+      params.set('page', String(visiblePage));
+      location.search = params.toString();
+    }
+
+    zoomOut.addEventListener('click', () => changeZoom(-.5));
+    zoomIn.addEventListener('click', () => changeZoom(.5));
 
     function parentPath(value) {
       const parts = value.split('/').filter(Boolean);
@@ -94,7 +124,7 @@
       const page = await pdfDocument.getPage(pageNumber);
       const baseViewport = page.getViewport({ scale:1 });
       const availableWidth = Math.min(stage.clientWidth - (stage.clientWidth <= 640 ? 0 : 24), 1100);
-      const cssScale = Math.max(.25, availableWidth / baseViewport.width);
+      const cssScale = Math.max(.25, availableWidth / baseViewport.width) * zoom;
       const viewport = page.getViewport({ scale:cssScale });
       const outputScale = Math.min(window.devicePixelRatio || 1, 2);
       const canvas = document.createElement('canvas');
@@ -103,6 +133,7 @@
       canvas.height = Math.floor(viewport.height * outputScale);
       canvas.style.width = `${Math.floor(viewport.width)}px`;
       canvas.style.height = `${Math.floor(viewport.height)}px`;
+      shell.style.width = `${Math.floor(viewport.width)}px`;
       shell.style.minHeight = `${Math.floor(viewport.height)}px`;
       shell.querySelector('.page-wait').replaceWith(canvas);
       await page.render({
@@ -135,7 +166,10 @@
 
       const positionObserver = new IntersectionObserver(entries => {
         const visible = entries.filter(entry => entry.isIntersecting).sort((a,b) => b.intersectionRatio - a.intersectionRatio)[0];
-        if (visible) metaNode.textContent = `${formatBytes(Number(metaNode.dataset.size))} · страница ${visible.target.dataset.page} из ${count}`;
+        if (visible) {
+          visiblePage = Number(visible.target.dataset.page);
+          metaNode.textContent = `${formatBytes(Number(metaNode.dataset.size))} · страница ${visiblePage} из ${count}`;
+        }
       }, { root:stage, threshold:[.25,.5,.75] });
 
       pagesNode.querySelectorAll('.page').forEach(shell => {
